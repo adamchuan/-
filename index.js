@@ -17,30 +17,73 @@ var province = require( './province.json' );
 
 var cookie = 'global_cookie=h0i9n5i88xadjb5wtv51ub8bj2vijc8k9cp; new_search_uid=cfe6d014e48b7504f837679c7a9d3efb; searchLabelN=3_1452653837_34434%5B%3A%7C%40%7C%3A%5D0e65b2add0697bd4d1f5d9393d1d5df0; searchConN=3_1452653837_35112%5B%3A%7C%40%7C%3A%5D5b2ece6c9c77452e0ba99353ebbd8c41; global_wapandm_cookie=47vbaoxdx3qx589nj84ja3jhp2pijc9aoyx; showHongbao_1211238844=1; showAdsh=1; showHongbao_1211184600=1; newhouse_chat_guid=60603D6A-DFF5-7C69-8215-0C128E1439BC; jiatxShopWindow=1; sf_source=; showAdsz=1; showHongbao_2810836906=1; showHongbao_2811093454=1; showHongbao_2811209174=1; showHongbao_1211041900=1; showHongbao_1210472542=1; vh_newhouse=3_1452741988_938%5B%3A%7C%40%7C%3A%5Db0155f734e792699b3704fb6e29f26c1; vh_shop=3_1452751247_7974%5B%3A%7C%40%7C%3A%5D3795578a6c0bcd5d8c001dcafd20fd80; newhouse_ac=3_1452746167_3628%5B%3A%7C%40%7C%3A%5Df5022c64b5e1f14ca19719d3a2e0f13c; token=6e7ce5b692a649049ff59dade5f80d51; city=sz; newhouse_user_guid=3A73B66E-D417-A86C-5E78-FD43485C661F; __utmt_t0=1; __utmt_t1=1; __utmt_t2=1; __utma=147393320.1114305379.1452653794.1452741954.1452746112.3; __utmb=147393320.318.10.1452746112; __utmc=147393320; __utmz=147393320.1452653794.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); unique_cookie=U_4r4o6bm3b9b5toehu9mp23nhj2xijdrixy8*59';
 
-var startPage = 80;
+var startPage = 1;
 var maxPage = 50;
 var citylength = 100;
 var maxTasksLength = 5; /* 确保同时发起的http链接不超过10个 */
-
+var timeout = 5000; //如果10s还没打开页面 
 var maskPageTaskLength = 10; //同时抓取页面的长度
 
 var totalcount = 0;
 
 
-// var p = Promise.resolve();
 
-// for ( let i = 0; i < 1; i++ ) {
-// 	p = p.then( getProvince( province[ i ] ) );
-// };
+var p = Promise.resolve();
 
-// p.then( function () {
-// 	console.log( totalcount );
-// } );
+for ( let i = 1; i < 2; i++ ) {
+	p = p.then( getProvince( province[ i ] ) );
+};
+
+p.then( function () {
+	console.log( totalcount );
+} );
 
 
 /* test */
 
-getDetail( 'http://hujinghuayuan0755.fang.com', citys[ 0 ], [] );
+// getDetail( 'http://hujinghuayuan0755.fang.com', citys[ 0 ], [] );
+
+
+var errpage = [];
+
+function addErrPage( url ) {
+
+	errpage.push( url );
+
+}
+
+function fetch( url, option, cb ) {
+
+	var trycount = 5; //如果试5次都不上就放弃
+	var count = 0;
+
+	var defaultOption = Object.assign( {
+		encoding: 'gb2312',
+		compressed: true,
+		open_timeout: timeout,
+	}, option );
+
+	sendData();
+
+	function sendData() {
+		n.get( url, defaultOption, ( err, res, body ) => {
+
+			if ( err ) {
+				count++;
+				if ( count === 5 ) {
+					console.log( `错误  ${url} 经常尝试5次连接 依旧失败 ${err}` )
+					cb( err, res, body );
+				} else {
+					sendData();
+				}
+			} else {
+				cb( err, res, body );
+			}
+
+		} );
+	}
+
+}
 
 function getProvince( province ) {
 
@@ -51,24 +94,36 @@ function getProvince( province ) {
 
 			var province_datasouce = [];
 
+			var rejectHandler = function () {
+				fs.writeFile( "backup.json", JSON.stringify( province_datasouce, null, "\t" ), function ( err ) {
+					if ( err ) {
+						reject( err );
+					}
+					console.log( `完成 ${path}保存成功 ` );
+				} );
+			}
+
 			var citys = province.citys;
+			var citylength = 1;
 			var p = Promise.resolve();
 			for ( var i = 0; i < citylength; i++ ) {
+
 				p = p.then( getCityData( citys[ i ] ) )
 					.then( function ( data ) {
 						var city = data[ 0 ];
 						var citysdata = data[ 1 ];
 						var dir = 'city';
 						province_datasouce = province_datasouce.concat( citysdata );
+
 						return Promise.resolve( [ dir, city.name, citysdata ] );
 					} )
-					.then( makeXLSX() );
+					.then( makeXLSX, rejectHandler );
 			}
 			p.then( function () {
-				var dir = 'province/';
-				return Promise.resolve( [ province, province.name, province_datasouce ] );
-			} )
-			p.then( makeXLSX() );
+					var dir = 'province';
+					return Promise.resolve( [ dir, province.name, province_datasouce ] );
+				}, rejectHandler )
+				.then( makeXLSX, rejectHandler )
 
 		} );
 
@@ -79,7 +134,8 @@ function getProvince( province ) {
 function getMaxPage( url ) {
 	return new Promise( ( resolve, reject ) => {
 		n.get( url, {
-			encoding: 'gb2312'
+			encoding: 'gb2312',
+			compressed: true //一定要开启gzip
 		}, ( err, red, body ) => {
 
 			if ( err ) {
@@ -125,7 +181,7 @@ function getCityData( city ) {
 				console.log( `${city.name} 共有 ${maxPage} 页` );
 				var p = Promise.resolve();
 
-				for ( let page = startPage; page <= maxPage; page++ ) {
+				for ( let page = startPage; page <= 1; page++ ) {
 
 					p = p.then( getList( city, page, citysdata ), failHandler )
 
@@ -168,8 +224,10 @@ function getList( city, page, datasouce ) {
 			}
 
 
-			n.get( url, {
-				encoding: 'gb2312'
+			fetch( url, {
+				encoding: 'gb2312',
+				compressed: true,
+				out_timeout: timeout,
 			}, ( err, red, body ) => {
 				if ( err ) {
 					console.log( err );
@@ -269,17 +327,15 @@ function getDetail( detailUrl, city, datasouce ) {
 	return new Promise( function ( resolve, reject ) {
 		// let detailPage = `http://m.fang.com/xf/${city}/${pageid}.htm`;
 
-		n.get( detailUrl, {
+		fetch( detailUrl, {
 			encoding: 'gb2312',
-			headers: {
-				cookie: cookie,
-				'Upgrade-Insecure-Requests': '1',
-				'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/47.0.2526.106 Safari/537.36'
-			}
+			compressed: true,
+			open_timeout: timeout,
 		}, ( err, res, body ) => {
 
 			if ( err ) {
-				console.log( `错误 中转页 ${detailUrl} url分析失败 ${err}` )
+				console.log( `错误 中转页 ${detailUrl} url分析失败 ${err}` );
+				addErrPage( detailUrl );
 				resolve();
 				return;
 			}
@@ -345,6 +401,7 @@ function getDetail( detailUrl, city, datasouce ) {
 
 				var infoUrl = $gaikuang.prev().find( ".more a" ).attr( "href" );
 
+				console.log( infoUrl );
 				getInfo2( infoUrl, houseData )
 					.then( () => {
 						datasouce.push( [
@@ -375,7 +432,7 @@ function getDetail( detailUrl, city, datasouce ) {
 						resolve();
 					} );
 
-			} else {
+			} else if ( $doc.find( '#iframe_map' ).length > 0 ) {
 
 				var infoUrl = $doc.find( ".information_li .more p a" ).attr( "href" ) ||
 					$doc.find( ".cd_right_nr1_Ub .cd_fir_xx_a.FL" ).first().find( "li" ).last().find( "a" ).attr( "href" );
@@ -422,6 +479,12 @@ function getDetail( detailUrl, city, datasouce ) {
 						resolve();
 					} );
 
+			} else {
+
+				console.log( `错误 未知类型 ${detailUrl}的中转页` );
+
+				resolve();
+
 			}
 
 
@@ -432,12 +495,21 @@ function getDetail( detailUrl, city, datasouce ) {
 
 function getMap( url, houseData ) { //得到经纬度
 	return new Promise( ( resolve, reject ) => {
-		n.get( url, {
-			encoding: 'utf-8'
+		fetch( url, {
+			encoding: 'utf-8',
+			open_timeout: timeout,
+			compressed: true,
 		}, ( err, res, body ) => {
 
 			if ( err ) {
-				console.log( `错误 中转页 ${url} map分析失败 ${err}` )
+				console.log( `
+										错误 类型2的map页 $ {
+											url
+										}
+										map分析失败 $ {
+											err
+										}
+										` )
 				resolve();
 				return;
 			}
@@ -461,12 +533,20 @@ function getMap( url, houseData ) { //得到经纬度
 
 function getInfo( url, houseData ) { //得到信息
 	return new Promise( ( resolve, reject ) => {
-		n.get( url, {
-			encoding: 'utf-8'
+		fetch( url, {
+			encoding: 'utf-8',
+			open_timeout: timeout,
 		}, ( err, res, body ) => {
 
 			if ( err ) {
-				console.log( `错误 中转页 ${url} info分析失败 ${err}` )
+				console.log( `
+										错误 类型1的info页 $ {
+											url
+										}
+										分析失败 $ {
+											err
+										}
+										` )
 				resolve();
 				return;
 			}
@@ -524,12 +604,21 @@ function getMap2( mapUrl, houseData ) {
 
 	return new Promise( ( resolve, reject ) => {
 
-		n.get( url, {
-			encoding: 'GBK'
+		fetch( mapUrl, {
+			encoding: 'GBK',
+			open_timeout: timeout,
+			compressed: true,
 		}, ( err, res, body ) => {
 
 			if ( err ) {
-				console.log( `错误 中转页 ${url} map分析失败 ${err}` );
+				console.log( `
+										错误 类型2的map页 $ {
+											url
+										}
+										map分析失败 $ {
+											err
+										}
+										` );
 				resolve();
 				return;
 			}
@@ -561,19 +650,27 @@ function getMap2( mapUrl, houseData ) {
 
 function getInfo2( infoUrl, houseData ) {
 
+
 	return new Promise( function ( resolve, reject ) {
 
-		n.get( infoUrl, {
-			encoding: 'gb2312'
+		fetch( infoUrl, {
+			encoding: 'gb2312',
+			compressed: true,
+			open_timeout: timeout,
 		}, ( err, res, body ) => {
 
 			if ( err ) {
-				console.log( `错误 info页 ${infoUrl} url分析失败 ${err}` )
-				resolve();
+				console.log( `
+										错误 类型2的info页 $ {
+											infoUrl
+										}
+										分析失败 $ {
+											err
+										}
+										` )
 				return;
 			}
 
-			body = $( body );
 			var $doc = $( body );
 
 			var $lbox = $doc.find( ".lbox" );
@@ -588,79 +685,93 @@ function getInfo2( infoUrl, houseData ) {
 
 
 
-			houseData.name = $doc.find( ".maininfo .leftinfo .ewmBoxTitle .floatl" ).text().tirm(), //名称
-				houseData.price = $doc.find( ".pred.pirceinfo" ).eq( 0 ).text().trim(), //价格
-				houseData.cityname = city.name, //城市
-				houseData.county = $baseinfo.find( "strong:contains(所属区域)" ).parent().contents().eq( 1 ).text().trim(), //区县
-				houseData.address = $baseinfo.find( "strong:contains(小区地址)" ).parent().contents().eq( 1 ).text().trim(), //'小区地址'
-				houseData.wuyeleibie = $baseinfo.find( "strong:contains(物业类别)" ).parent().contents().eq( 1 ).text().trim(), //物业类别 
-				houseData. // wuyegongsi = $xianguanxinxi.find( "strong:contains(代理商：)" ).parent().contents().eq( 1 ).text().trim(), //物业类别 
-			houseData. // wuyedizhi = "", //物业地址
-			houseData.wuyefei = $baseinfo.find( "strong:contains(物 业 费 )" ).parent().contents().eq( 1 ).text().trim(), //物业费
-				houseData.jungongshijian = $baseinfo.find( "strong:contains(竣工时间)" ).parent().contents().eq( 1 ).text().trim(), //竣工时间
-				houseData.kaifashang = $baseinfo.find( "strong:contains(开 发 商)" ).parent().contents().eq( 1 ).text().trim(), //开发商
-				houseData.jianzhuleibie = $baseinfo.find( "strong:contains(建筑类别)" ).parent().contents().eq( 1 ).text().trim(), //建筑类别
-				houseData.jianzhumianji = $baseinfo.find( "strong:contains(建筑面积)" ).parent().contents().eq( 1 ).text().trim(), //建筑面积	
-				houseData.zhandimianji = $baseinfo.find( "strong:contains(占地面积)" ).parent().contents().eq( 1 ).text().trim(), //占地面积
-				houseData.dangqihushu = $baseinfo.find( "strong:contains(当期户数)" ).parent().contents().eq( 1 ).text().trim(), //当期户数 
-				houseData.zonghushu = $baseinfo.find( "strong:contains(总 户 数)" ).parent().contents().eq( 1 ).text().trim(), //总户数
-				houseData. // tingchewei = $peitao.find( "string:contains(停 车 位：)" ).parent().contents().eq( 1 ).text().trim(), //停车位
-			houseData.jianjie = $jianjie.text().trim(), //小区简介
-				houseData.zhoubian = $zhoubian.text().trim(); //周边信息
+			houseData.name = $doc.find( ".maininfo .leftinfo .ewmBoxTitle .floatl" ).text().trim(); //名称
+			houseData.price = $doc.find( ".pred.pirceinfo" ).eq( 0 ).text().trim(); //价格
+
+			houseData.county = $baseinfo.find( "strong:contains(所属区域)" ).parent().contents().eq( 1 ).text().trim(); //区县
+			houseData.address = $baseinfo.find( "strong:contains(小区地址)" ).parent().contents().eq( 1 ).text().trim(); //'小区地址'
+			houseData.wuyeleibie = $baseinfo.find( "strong:contains(物业类别)" ).parent().contents().eq( 1 ).text().trim(); //物业类别 
+			// houseData. // wuyegongsi = $xianguanxinxi.find( "strong:contains(代理商：)" ).parent().contents().eq( 1 ).text().trim(); //物业类别 
+			// houseData. // wuyedizhi = "", //物业地址
+			houseData.wuyefei = $baseinfo.find( "strong:contains(物 业 费 )" ).parent().contents().eq( 1 ).text().trim(); //物业费
+			houseData.jungongshijian = $baseinfo.find( "strong:contains(竣工时间)" ).parent().contents().eq( 1 ).text().trim(); //竣工时间
+			houseData.kaifashang = $baseinfo.find( "strong:contains(开 发 商)" ).parent().contents().eq( 1 ).text().trim(); //开发商
+			houseData.jianzhuleibie = $baseinfo.find( "strong:contains(建筑类别)" ).parent().contents().eq( 1 ).text().trim(); //建筑类别
+			houseData.jianzhumianji = $baseinfo.find( "strong:contains(建筑面积)" ).parent().contents().eq( 1 ).text().trim(); //建筑面积	
+			houseData.zhandimianji = $baseinfo.find( "strong:contains(占地面积)" ).parent().contents().eq( 1 ).text().trim(); //占地面积
+			houseData.dangqihushu = $baseinfo.find( "strong:contains(当期户数)" ).parent().contents().eq( 1 ).text().trim(); //当期户数 
+			houseData.zonghushu = $baseinfo.find( "strong:contains(总 户 数)" ).parent().contents().eq( 1 ).text().trim(); //总户数
+			// houseData. // tingchewei = $peitao.find( "string:contains(停 车 位：)" ).parent().contents().eq( 1 ).text().trim(); //停车位
+			houseData.jianjie = $jianjie.text().trim(); //小区简介
+			houseData.zhoubian = $zhoubian.text().trim(); //周边信息
 			// lat = "", //精度
 			// lng = ""; //维度
 
-			getMap2( mapUrl, houseData ).then( function () {
-				resolve(); //返回数据
-			}, function ( err ) {
-				console.log( `错误 info页 ${infoUrl} url分析失败 ${err}` )
-				reject();
-			} );
+			getMap2( mapUrl, houseData )
+				.then( function () {
+					resolve(); //返回数据
+				}, function ( err ) {
+					console.log( `
+										错误 类型2的map页 $ {
+											mapUrl
+										}
+										url分析失败 $ {
+											err
+										}
+										` );
+					reject();
+				} );
 
 
 		} );
+
 	} );
 }
 
 
-function makeXLSX() {
-	return function ( data ) {
-		var dir = data[ 0 ];
-		var filename = data[ 1 ];
-		var datasouce = data[ 2 ];
-		datasouce.unshift(
-			[ '小区名称',
-				'价格',
-				'城市',
-				'区县',
-				'小区地址',
-				'物业类别',
-				'物业公司',
-				'物业地址',
-				'物业费',
-				'竣工时间',
-				'开发商', 　　　　
-				'建筑类别',
-				'建筑面积	占地面积',
-				'当期户数',
-				'总户数',
-				'停车位',
-				'小区简介',
-				'周边信息',
-				'经度',
-				'纬度'
-			] );
+function makeXLSX( data ) {
 
-		return new Promise( function ( resolve, reject ) {
-			var file = `${filename}.xlsx`;
-			console.log( `正在生成${filename}` );
-			var buffer = xlsx.build( [ {
-				name: filename,
-				data: datasouce
-			} ] ); // returns a buffer 
-			fs.writeFileSync( path.join( dir, file ), buffer, 'binary' );
-			console.log( `完成 ${filename}保存成功` );
-			resolve();
-		} );
-	}
+	var dir = data[ 0 ];
+	var filename = data[ 1 ];
+	var datasouce = data[ 2 ];
+
+	var savedata = [
+		[ '小区名称',
+			'价格',
+			'城市',
+			'区县',
+			'小区地址',
+			'物业类别',
+			'物业公司',
+			'物业地址',
+			'物业费',
+			'竣工时间',
+			'开发商', 　　　　
+			'建筑类别',
+			'建筑面积',
+			'占地面积',
+			'当期户数',
+			'总户数',
+			'停车位',
+			'小区简介',
+			'周边信息',
+			'经度',
+			'纬度',
+		]
+	].concat( datasouce );
+
+	console.log( savedata )
+
+	return new Promise( function ( resolve, reject ) {
+		var file = `${filename}.xlsx `;
+		console.log( `正在生成${filename}` );
+		var buffer = xlsx.build( [ {
+			name: filename,
+			data: savedata,
+		} ] ); // returns a buffer 
+		fs.writeFileSync( path.join( file ), buffer, 'binary' );
+		console.log( `完成 ${filename}保存成功 ` );
+		resolve();
+	} );
+
 }
