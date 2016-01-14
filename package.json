@@ -1,0 +1,19 @@
+{
+  "name": "pacong",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bluebird": "^3.1.1",
+    "cheerio": "^0.19.0",
+    "iconv": "^2.1.11",
+    "iconv-lite": "^0.1.0",
+    "node-xlsx": "^0.6.0",
+    "request": "^2.67.0"
+  }
+}
