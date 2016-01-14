@@ -1,4 +1,8 @@
-[{
+[ {
+    "name": "深圳",
+    "href": "http://m.fang.com/xf/sz.html",
+    "sname": "sz"
+}, {
     "name": "鞍山",
     "href": "http: //m.fang.com/xf/anshan.html",
     "sname": "anshan"
@@ -1459,10 +1463,6 @@
     "href": "http://m.fang.com/xf/sh.html",
     "sname": "sh"
 }, {
-    "name": "深圳",
-    "href": "http://m.fang.com/xf/sz.html",
-    "sname": "sz"
-}, {
     "name": "苏州",
     "href": "http://m.fang.com/xf/suzhou.html",
     "sname": "suzhou"
@@ -2310,4 +2310,4 @@
     "name": "镇海",
     "href": "http://m.fang.com/xf/zhenhai.html",
     "sname": "zhenhai"
-}]
+} ]
