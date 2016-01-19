@@ -1,6 +1,10 @@
 [{
     "name": "直辖市",
     "citys": [{
+        "name": "北京",
+        "href": "http://bj.fang.com/",
+        "sname": "bj"
+    }, {
         "name": "上海",
         "href": "http://sh.fang.com/",
         "sname": "sh"

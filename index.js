@@ -1,965 +1,706 @@
 'use strict';
 
-var request = require( 'request' );
-var xlsx = require( 'node-xlsx' );
-var $ = require( 'cheerio' );
-var Promise = require( 'bluebird' );
-var iconv = require( 'iconv-lite' );
-var fs = require( 'fs' );
-var querystring = require( "querystring" );
-var n = require( "needle" );
-var path = require( 'path' );
-var url = require( 'url' );
+var request = require('request');
+var xlsx = require('node-xlsx');
+var $ = require('cheerio');
+var Promise = require('bluebird');
+var iconv = require('iconv-lite');
+var fs = require('fs');
+var querystring = require("querystring");
+var n = require("needle");
+var path = require('path');
+var url = require('url');
+var xlsxSteam = require('xlsx-stream');
 
-
-var citys = require( './citys.json' );
-var province = require( './province.json' );
-
-var cookie = 'global_cookie=h0i9n5i88xadjb5wtv51ub8bj2vijc8k9cp; new_search_uid=cfe6d014e48b7504f837679c7a9d3efb; searchLabelN=3_1452653837_34434%5B%3A%7C%40%7C%3A%5D0e65b2add0697bd4d1f5d9393d1d5df0; searchConN=3_1452653837_35112%5B%3A%7C%40%7C%3A%5D5b2ece6c9c77452e0ba99353ebbd8c41; global_wapandm_cookie=47vbaoxdx3qx589nj84ja3jhp2pijc9aoyx; showHongbao_1211238844=1; showAdsh=1; showHongbao_1211184600=1; newhouse_chat_guid=60603D6A-DFF5-7C69-8215-0C128E1439BC; jiatxShopWindow=1; sf_source=; showAdsz=1; showHongbao_2810836906=1; showHongbao_2811093454=1; showHongbao_2811209174=1; showHongbao_1211041900=1; showHongbao_1210472542=1; vh_newhouse=3_1452741988_938%5B%3A%7C%40%7C%3A%5Db0155f734e792699b3704fb6e29f26c1; vh_shop=3_1452751247_7974%5B%3A%7C%40%7C%3A%5D3795578a6c0bcd5d8c001dcafd20fd80; newhouse_ac=3_1452746167_3628%5B%3A%7C%40%7C%3A%5Df5022c64b5e1f14ca19719d3a2e0f13c; token=6e7ce5b692a649049ff59dade5f80d51; city=sz; newhouse_user_guid=3A73B66E-D417-A86C-5E78-FD43485C661F; __utmt_t0=1; __utmt_t1=1; __utmt_t2=1; __utma=147393320.1114305379.1452653794.1452741954.1452746112.3; __utmb=147393320.318.10.1452746112; __utmc=147393320; __utmz=147393320.1452653794.1.1.utmcsr=(direct)|utmccn=(direct)|utmcmd=(none); unique_cookie=U_4r4o6bm3b9b5toehu9mp23nhj2xijdrixy8*59';
+var citys = require('./citys.json');
+var province = require('./province.json');
 
 var startPage = 1;
-var maxPage = 20;
 var citylength = 100;
 var maxTasksLength = 20; /* 确保同时发起的http链接不超过10个 */
-var timeout = 5000; //如果5s还没打开页面 
+var timeout = 10000; //如果5s还没打开页面 
 var maskPageTaskLength = 10; //同时抓取页面的长度
-
+var MAX_CACHE_LENGTH = 1000; // 最大缓存数
 var totalcount = 0;
-var taskTimeout = 15000; //如果一个任务15秒还没完成 就继续退出这个任务
+var taskTimeout = 1000 * 20; //如果一个任务15秒还没完成 就继续退出这个任务
 
-var province_length = province.length;
+var city_length = citys.length;
 
 var p = Promise.resolve();
 
-for ( let i = 1; i < province_length; i++ ) {
-	p = p.then( getProvince( province[ i ] ) );
+for (let i = 0; i < city_length ; i++) {
+    p = p.then(createXLSX(citys[i].name))
+        .then(getCityData(citys[i]));
 };
 
-p.then( function () {
-	console.log( totalcount );
-} );
+var logfunc = console.log;
+console.log = function(){
+    var date = new Date();
+    var time = `${date.getHours()}:${date.getMinutes()}:${date.getSeconds()}`;
+    var args = [time];
+    for(var i = 0 ; i < arguments.length ; i++){
+        args.push(arguments[i]);
+    }
+    logfunc.apply(null,args);
+};
 
-/* test */
 
-// getDetail( 'http://hujinghuayuan0755.fang.com', citys[ 0 ], [] );
+p.then(function () {
+    console.log(totalcount);
+});
 
-var nowCity = "";
+
 var nowProvince = "";
 var nowPage = "";
-var nowCityData = [];
-var nowProvinceData = [];
-
-
-// process.on('SIGINT', function() {
-//   makeJSON(['backup',nowCity+"-"+nowPage,nowCityData])
-//   .then(function(){
-//   	return makeJSON(['backup',`${nowProvince}-${nowCity}-${nowPage}`,nowProvinceData]);
-//   });
-// });
-// process.on('exit',function(code){ //意外退出时保存
-
-// 	console.log(code);
-// 	makeJSON(['backup',nowCity+"-"+nowPage,nowCityData])
-// 	.then(function(){
-// 		return makeJSON(['backup',`${nowProvince}-${nowCity}-${nowPage}`,nowProvinceData]);
-// 	});
-// });
 
 var errpage = [];
 
-function addErrPage( url ) {
+var xlsx_dir = 'xlsx';
+var error_dir = 'error_url';
 
-	errpage.push( url );
+makedir(xlsx_dir);
+makedir(error_dir);
 
+function createXLSX(name){
+    return function(){
+        return new Promise((resolve,reject)=>{
+            var buffer = xlsx.build([{
+                name: name,
+                data: [],
+            }]); // returns a buffer 
+
+            fs.writeFile( path.join(xlsx_dir,name+'.xlsx'), buffer, 'binary', function (err) {
+                resolve();
+            });
+        })
+    }
 }
 
-function fetch( url, option, cb ) {
-
-	var trycount = 3; //如果试3次都不上就放弃
-	var count = 0;
-
-	var defaultOption = Object.assign( {
-		encoding: 'gb2312',
-		compressed: true,
-		open_timeout: timeout,
-	}, option );
-
-	sendData();
-
-	function sendData() {
-		n.get( url, defaultOption, ( err, res, body ) => {
-
-			if ( err ) {
-				count++;
-				if ( count === trycount ) {
-					console.log( `错误  ${url} 经常尝试3次连接 依旧失败 ${err}` );
-					addErrPage( url );
-					cb( err, res, body );
-				} else {
-					sendData();
-				}
-			} else {
-				cb( err, res, body );
-			}
-
-		} );
-	}
-
+function makedir(dir){
+    if( !fs.existsSync(dir) ){
+        fs.mkdirSync(dir);
+    }
 }
 
-function getProvince( province ) {
+function addErrPage(url) {
 
-	return function () {
-
-		return new Promise( ( resolve, reject ) => {
-			console.log( `开始 分析${province.name}省的数据` );
-
-			var province_data = [];
-
-			nowProvince = province.name;
-			nowProvinceData = province_data;
-
-			var rejectHandler = function ( err ) {
-				console.log( err );
-				return makeJSON( [ '', 'backup', nowProvinceData ] );
-			}
-
-			var citys = province.citys;
-			var citylength = citys.length;
-			var p = Promise.resolve();
-			for ( var i = 0; i < citylength; i++ ) {
-
-				p = p.then( getCityData( citys[ i ] ) )
-					.then( ( data ) => {
-						var city = data[ 0 ];
-						var citysdata = data[ 1 ];
-						var dir = 'city';
-						province_data = province_data.concat( citysdata );
-
-						return Promise.all( [
-							makeJSON( [ dir, city.name, citysdata ] ),
-							makeJSON( [ 'city', city.name + '-' + 'error', errpage ] ),
-							makeXLSX( [ 'city', city.name, citysdata ] )
-						] );
-
-					} )
-
-				.then( () => {
-					errpage = []; //清空errpage
-
-				}, rejectHandler )
-
-
-			}
-
-			p.then( function () {
-				var dir = 'province';
-				totalcount += province_data.lenght;
-				return Promise.all( [
-					makeJSON( [ dir, province.name, province_data ] ),
-					makeXLSX( [ dir, province.name, province_data ] ),
-				] );
-			}, rejectHandler )
-
-			.then( function () {
-				console.log( '\n', province.name, '拉取成功' );
-				resolve();
-			} )
-
-		} );
-
-	}
-
-}
-
-function getTotalPage( url ) {
-	return new Promise( ( resolve, reject ) => {
-		fetch( url, {
-			encoding: 'gb2312',
-			compressed: true //一定要开启gzip
-		}, ( err, red, body ) => {
-
-			if ( err ) {
-				console.log( err );
-				resolve( 0 );
-				return;
-			}
-
-			var $doc = $( body );
-			var $pages = $doc.find( ".page .fr a" );
-
-			var totalPage = parseInt( $pages.eq( $pages.length - 3 ).text() );
-
-			if ( totalPage.toString() === 'NaN' ) {
-				totalPage = 0;
-			}
-			resolve( totalPage );
-
-		} );
-	} )
-}
-
-function getCityData( city ) {
-
-	return function () {
-
-		return new Promise( function ( resolve, reject ) {
-
-			console.log( `开始 拉取${city.name}的数据` );
-
-			var citysdata = []; //储存每个城市的数据
-
-			nowCity = citysdata;
-			var page = 1;
-
-			var p = Promise.resolve();
-
-			p.then( function () {
-				if ( city.sname !== 'bj' ) {
-					var url = `http://newhouse.${city.sname}.fang.com/house/s/`;
-				} else {
-					var url = `http://newhouse.fang.com/house/s/`;
-				}
-				return getTotalPage( url );
-			} ).then( function ( totalPage ) {
-
-				console.log( `${city.name} 共有 ${totalPage} 页` );
-				var p = Promise.resolve();
-
-				for ( let page = startPage; page <= totalPage && page <= maxPage; page++ ) {
-
-					nowPage = page;
-
-					p = p.then( getList( city, page, citysdata ), failHandler )
-
-				}
-
-				function failHandler( err ) {
-					console.log( err );
-				}
-
-				p.then( function () {
-							resolve( [ city, citysdata ] );
-							console.log( `完成 拉取${city.name}的数据` );
-						},
-						function () {
-							resolve( [ city, citysdata ] );
-							console.log( `完成 拉取${city.name}的数据` );
-						} )
-					.catch( function ( e ) {
-						console.log( "程序错误", e );
-						resolve( [ city, citysdata ] );
-						console.log( `完成 拉取${city.name}的数据` );
-					} );
-			} );
-
-		} );
-
-	}
+    errpage.push(url);
 
 }
 
 
-function getList( city, page, datasouce ) {
+function getCityData(city) {
 
-	return function () {
+    return function () {
 
-		return new Promise( function ( resolve, reject ) {
+        return new Promise(function (resolve, reject) {
 
-			if ( city.sname !== 'bj' ) {
-				var url = `http://newhouse.${city.sname}.fang.com/house/s/b9${page}/`;
-			} else {
-				var url = `http://newhouse.fang.com/house/s/b9${page}/`;
-			}
+            console.log(`[${city.name}] 数据拉取开始`);
+
+            var taskPool = []; //任务池
+            var finishCount = 0;
+            var maxTasksLength = 100; /* 确保同时发起的http链接不超过100个 */
+            var runingTaskCount = 0;
+            var endflag = false; // 所有list数据是不是都添加了
+
+            var filepath = path.join(xlsx_dir,`${city.name}.xlsx`);
+
+            Promise.resolve()
+
+            .then(getXfList(taskPool, city, runTask))
+
+            .then(getESFList(taskPool, city, runTask))
+
+            .then(() => {
+                endflag = true;
+            });
+
+            function failHandler(err) {
+                console.log(err);
+            }
 
 
-			fetch( url, {
-				encoding: 'gb2312',
-				compressed: true,
-				out_timeout: timeout,
-			}, ( err, red, body ) => {
-				if ( err ) {
-					console.log( err );
-					resolve();
-				} else {
+            var x = xlsxSteam();
+            var writeable = fs.createWriteStream(filepath);
+            x.pipe(writeable);
 
-					console.log( `\r\n开始 分析${city.name}第${page}页\r\n` );
-					var $doc = $( body );
-					var $list = $doc.find( '.contentList' );
+            var sheet = x.sheet(city.name);
 
-					var tasks = [];
 
-					/* 分批传送 */
+            sheet.write([
+                '小区名称',
+                '城市',
+                '区县',
+                "单价", 
+                "开盘时间", 
+                "交房时间", 
+                "售楼处电话", 
+                "楼盘地址", 
+                "装修状况", 
+                "建筑形式", 
+                "规划面积", 
+                "建筑面积", 
+                "主力户型", 
+                "容  积 率", 
+                "绿  化 率", 
+                "房屋产权", 
+                "规划户数", 
+                "车  位 数", 
+                "物业公司", 
+                "物业类型", 
+                "物  业 费", 
+                "开  发 商", 
+                "销售代理", 
+                "工程进度", 
+                "预售许可证", 
+                "售楼处地址", 
+                "房屋朝向", 
+                "建筑设计单位", 
+                "栋数", 
+                "施工单位",
+                "经度",
+                "纬度",
+                "小区简介",
+                "小区周边",
+                "详情页地址",
+            ]);
 
-					if ( $list.length != 0 ) {
 
-						var detailUrl_queue = [];
-						var len = $list.length;
+            function runTask() {
 
-						for ( let i = 0; i < len; i += maxTasksLength ) {
+                if (runingTaskCount >= maxTasksLength || taskPool.length == 0) { //超过执行任务数上限 或者已经完成任务 直接退出
+                    return;
+                }
 
-							let queue_index = i / maxTasksLength;
+                var detail_url = taskPool.shift();
+                runingTaskCount++;
 
-							detailUrl_queue[ queue_index ] = [];
+                getDetail(detail_url, city)
 
-							for ( let j = i; j < maxTasksLength + i && j < len; j++ ) {
+                .then((houseData) => {
 
-								var $item = $list.eq( j );
-								var $h4 = $item.find( 'h4' );
-								var $link = $h4.find( 'a' ); //找到去下个页面的a标签
+                    runingTaskCount--;
 
-								var detailUrl = $link.attr( 'href' ).trim();
-								detailUrl_queue[ queue_index ].push( detailUrl );
-							}
+                    totalcount ++ ;
 
-						}
+                    try{
+                        sheet.write(houseData);
+                    }              
+                    catch(e){
+                        console.log(e);
+                        console.log(houseData);
+                        addErrPage(houseData);
+                    } 
 
-					} else {
+                    var isFinish = (endflag && taskPool.length == 0 && runingTaskCount == 0);
+                    if ( isFinish ) {
+                        console.log(`[${city.name}] 数据拉取完成`);
+                        sheet.end();
+                        x.finalize();
+                        if(errpage.length > 0 ){
+                            makeJSON({
+                                filename:city.name,
+                                datasouce:errpage,
+                                dir:error_dir
+                            })
+                            .then(()=>{
+                                errpage = [];
+                                resolve();
+                            });
+                        }else{
+                            resolve();
+                        }
 
-						$list = $doc.find( '.nlc_details' );
+                    } else {
+                        runTask();
+                    }                
 
-						var detailUrl_queue = [];
-						var len = $list.length;
+                });
 
-						for ( let i = 0; i < len; i += maxTasksLength ) {
+            }
 
-							let queue_index = i / maxTasksLength;
+        });
 
-							detailUrl_queue[ queue_index ] = [];
+    }
+}
 
-							for ( let j = i; j < maxTasksLength + i && j < len; j++ ) {
+function getESFList(taskPool, city, runTask) {
 
-								var $item = $list.eq( j );
-								var $name = $item.find( '.nlcd_name' );
-								var $link = $name.find( "a" ); //找到去下个页面的a标签
+    return function () {
 
-								var detailUrl = $link.attr( 'href' ).trim();
-								detailUrl_queue[ queue_index ].push( detailUrl );
-							}
+        return new Promise((resolve,reject)=>{
 
-						}
-					}
+            var url = `${city.href}/loupan/esf/list-page1.html`;
 
-					var p = Promise.resolve();
+            var p = getTotalPage(url)
 
-					detailUrl_queue.forEach( ( detailUrls, i ) => {
-						p = p.then( () => {
+            .then(function (totalPage) {
 
-							var tasks = detailUrls.map( ( detailUrl ) => {
-								return getDetail( detailUrl, city, datasouce );
-							} );
+                console.log(`[${city.name}] 二手房列表 共有 ${totalPage} 页`);
 
-							return Promise.all( tasks ).then( ( name ) => {
-								console.log( `完成 ${name}抓取完成` )
-							}, ( url ) => {
-								console.log( `失败 ${url}分析失败` );
-							} );
-						} );
-					} );
+                var p = Promise.resolve();
 
-					p.then( function () {
-						console.log( `\r\n完成 分析${city.name}第${page}页\r\n` );
-						resolve( [ city, datasouce ] );
-					} );
+                for (let page = startPage; page <= totalPage; page++) {
 
-				}
-			} );
+                    var url = `${city.href}/loupan/esf/list-page${page}.html`;
+                    p = p.then(getList(url))
 
-		} );
+                    .then((details) => {
+                        Array.prototype.push.apply(taskPool, details);
+                        console.log(`[${city.name}] 任务池添加成功 当前任务数${taskPool.length}`);
+                        runTask();
+                    });
 
-	}
+                }
+
+                p.then(()=>{
+                    console.log(`[${city.name}] 二手房列表 拉取完成`);
+                    resolve();
+                });
+
+            });
+
+        });
+
+    }
 }
 
 
-function timeoutPromise( time ) {
-	return new Promise( ( resolve, reject ) => {
-		setTimeout( function () {
-			resolve();
-		}, time );
-	} );
+function getXfList(taskPool, city, runTask) {
+    return function () {
+        return new Promise( (resolve,reject)=>{
+            var url = `${city.href}/loupan/list-page1.html`;
+            var p = getTotalPage(url)
+
+            .then(function (totalPage) {
+
+                console.log(`[${city.name}] 新房列表 共有 ${totalPage} 页`);
+                var p = Promise.resolve();
+
+                for (let page = startPage; page <= totalPage; page++) {
+
+                    var url = `${city.href}/loupan/list-page${page}.html`;
+                    p = p.then(getList(url))
+
+                    .then((details) => {
+                        Array.prototype.push.apply(taskPool, details);
+                        console.log(`[${city.name}] 任务池添加成功 当前任务数${taskPool.length}`);
+                        runTask();
+                    });
+
+                }
+
+                p.then(()=>{
+                    console.log(`[${city.name}] 新房列表 拉取完成`);
+                    resolve();
+                })
+            });
+        });
+    }
 }
 
+function getList(list_url) { //二手房
 
-function getDetail( detailUrl, city, datasouce ) {
+    return function () {
 
-	var detailPromise = new Promise( function ( resolve, reject ) {
-		// let detailPage = `http://m.fang.com/xf/${city}/${pageid}.htm`;
+        return new Promise(function (resolve, reject) {
 
-		fetch( detailUrl, {
-			encoding: 'gb2312',
-			compressed: true,
-			open_timeout: timeout,
-		}, ( err, res, body ) => {
+            fetch(list_url, (err, red, body) => {
+                if (err) {
+                    console.log(err);
+                    resolve();
+                } else {
 
-			if ( err ) {
-				console.log( `错误 中转页 ${detailUrl} url分析失败 ${err}` );
-				addErrPage( detailUrl );
-				resolve();
-				return;
-			}
+                    var $doc = $(body);
+                    var $list = $doc.find('.loupan-list1-s0');
 
-			body = $( body );
-			var $doc = $( body );
+                    /* 分批传送 */
 
+                    let details = [];
 
-			var name = "", //名称
-				price = "", //价格
-				cityname = city.name, //城市
-				county = "", //区县
-				address = "", //'小区地址'
-				wuyeleibie = "", //物业类别 
-				wuyegongsi = "", //物业公司
-				wuyedizhi = "", //物业地址
-				wuyefei = "", //物业费
-				jungongshijian = "", //竣工时间
-				kaifashang = "", //开发商
-				jianzhuleibie = "", //建筑类别
-				jianzhumianji = "", //建筑面积	
-				zhandimianji = "", //占地面积
-				dangqihushu = "", //当期户数 
-				zonghushu = "", //总户数
-				tingchewei = "", //停车位
-				jianjie = "", //小区简介
-				zhoubian = "", //周边信息
-				lat = "", //精度
-				lng = ""; //维度
+                    for (let i = 0; i < $list.length; i++) {
 
-			console.log( `开始 中转页 ${detailUrl} 分析` );
+                        var $item = $list.eq(i);
 
-			//初始化数据 
-			var houseData = {
-				name, //名称
-				price, //价格
-				cityname, //城市
-				county, //区县
-				address, //'小区地址',
-				wuyeleibie, //物业类别,
-				wuyegongsi, //物业公司
-				wuyedizhi, //物业地址
-				wuyefei, //物业费
-				jungongshijian, //竣工时间,
-				kaifashang, //开发商
-				jianzhuleibie, //建筑类别
-				jianzhumianji, //建筑面积
-				zhandimianji, //占地面积
-				dangqihushu, //当期户数,
-				zonghushu, //总户数
-				tingchewei, //停车位
-				jianjie, //小区简介
-				zhoubian, //周边信息
-				lat, //精度
-				lng //维度
-			}
+                        let detail_url = $item.attr('href').replace(/loupan/ig, 'detail');
 
-			var $gaikuang = $doc.find( ".XQgaikuang" );
+                        details.push(detail_url);
 
-			if ( $gaikuang.length > 0 ) {
+                    }
 
-				houseData.tingchewei = $gaikuang.find( "strong:contains(停y车y位)" ).parent().contents().eq( 1 ).text().trim(); //停车位
-				houseData.wuyegongsi = $gaikuang.find( "strong:contains(物业公司)" ).parent().contents().eq( 1 ).text().trim(); //物业公司
-				houseData.wuyedizhi = $gaikuang.find( "strong:contains(小区地址)" ).parent().contents().eq( 1 ).text().trim();
+                    resolve(details);
+                }
+            });
 
-				var infoUrl = $gaikuang.prev().find( ".more a" ).attr( "href" );
+        });
 
-				console.log( infoUrl );
-				getInfo2( infoUrl, houseData )
-					.then( () => {
-						datasouce.push( [
-							houseData.name, //名称
-							houseData.price, //价格
-							houseData.cityname, //城市
-							houseData.county, //区县
-							houseData.address, //'小区地址',
-							houseData.wuyeleibie, //物业类别,
-							houseData.wuyegongsi, //物业公司
-							houseData.wuyedizhi, //物业地址
-							houseData.wuyefei, //物业费
-							houseData.jungongshijian, //竣工时间,
-							houseData.kaifashang, //开发商
-							houseData.jianzhuleibie, //建筑类别
-							houseData.jianzhumianji,
-							houseData.zhandimianji, //建筑面积	占地面积
-							houseData.dangqihushu, //当期户数,
-							houseData.zonghushu, //总户数
-							houseData.tingchewei, //停车位
-							houseData.jianjie, //小区简介
-							houseData.zhoubian, //周边信息
-							houseData.lat, //精度
-							houseData.lng //维度
-						] );
-						resolve( houseData.name ); //返回数据
-					}, ( err ) => {
-						console.log( `错误 中转页 ${detailUrl} 分析失败 ${err}` );
-						resolve();
-					} );
+    }
+}
 
-			} else if ( $doc.find( '#iframe_map' ).length > 0 ) {
+function getDetail(detail_url, city) {
 
-				var infoUrl = $doc.find( ".information_li .more p a" ).attr( "href" ) ||
-					$doc.find( ".cd_right_nr1_Ub .cd_fir_xx_a.FL" ).first().find( "li" ).last().find( "a" ).attr( "href" );
-				var mapUrl = $doc.find( '#iframe_map' ).attr( "src" );
+    var detailPromise = new Promise(function (resolve, reject) {
+        // let detailPage = `http://m.fang.com/xf/${city}/${pageid}.htm`;
 
-				if ( !infoUrl || !mapUrl ) {
-					console.log( `错误 中转页 ${detailUrl} url分析失败 ` );
-					resolve();
-					return;
-				}
+        fetch(detail_url, (err, res, body) => {
 
-				infoUrl = url.resolve( detailUrl, infoUrl );
+            if (err) {
+                console.log(`[${city.name}] 详情页 ${detail_url} url分析失败 ${err}`);
+                resolve();
+                return;
+            }
+
+            body = $(body);
+            var $doc = $(body);
 
 
-				Promise.all( [ getMap( mapUrl, houseData ), getInfo( infoUrl, houseData ) ] )
-					.then( () => {
-						datasouce.push( [
-							houseData.name.replace( /\n|\r|\t/g, "" ), //名称
-							houseData.price.replace( /\n|\r|\t/g, "" ), //价格
-							houseData.cityname.replace( /\n|\r|\t/g, "" ), //城市
-							houseData.county.replace( /\n|\r|\t/g, "" ), //区县
-							houseData.address.replace( /\n|\r|\t/g, "" ), //'小区地址'
-							houseData.wuyeleibie.replace( /\n|\r|\t/g, "" ), //物业类别.replace(/\n|\r|\t/g,""),
-							houseData.wuyegongsi.replace( /\n|\r|\t/g, "" ), //物业公司
-							houseData.wuyedizhi.replace( /\n|\r|\t/g, "" ), //物业地址
-							houseData.wuyefei.replace( /\n|\r|\t/g, "" ), //物业费
-							houseData.jungongshijian.replace( /\n|\r|\t/g, "" ), //竣工时间.replace(/\n|\r|\t/g,""),
-							houseData.kaifashang.replace( /\n|\r|\t/g, "" ), //开发商
-							houseData.jianzhuleibie.replace( /\n|\r|\t/g, "" ), //建筑类别
-							houseData.jianzhumianji.replace( /\n|\r|\t/g, "" ),
-							houseData.zhandimianji.replace( /\n|\r|\t/g, "" ), //建筑面积	占地面积
-							houseData.dangqihushu.replace( /\n|\r|\t/g, "" ), //当期户数.replace(/\n|\r|\t/g,""),
-							houseData.zonghushu.replace( /\n|\r|\t/g, "" ), //总户数
-							houseData.tingchewei.replace( /\n|\r|\t/g, "" ), //停车位
-							houseData.jianjie.replace( /\n|\r|\t/g, "" ), //小区简介
-							houseData.zhoubian.replace( /\n|\r|\t/g, "" ), //周边信息
-							houseData.lat, //精度
-							houseData.lng //维度
-						] );
-						resolve( houseData.name ); //返回数据
-					}, ( err ) => {
-						console.log( `错误 中转页 ${detailUrl} 分析失败 ${err}` );
-						resolve();
-					} );
+            var name = "", //名称
+                price = "", //价格
+                cityname = city.name, //城市
+                county = "", //区县
+                tese = "", //特色
+                address = "", //'小区地址'
+                wuyeleibie = "", //物业类别 
+                wuyegongsi = "", //物业公司
+                wuyedizhi = "", //物业地址
+                wuyefei = "", //物业费
+                jungongshijian = "", //竣工时间
+                kaifashang = "", //开发商
+                jianzhuleibie = "", //建筑类别
+                jianzhumianji = "", //建筑面积  
+                zhandimianji = "", //占地面积
+                dangqihushu = "", //当期户数 
+                zonghushu = "", //总户数
+                tingchewei = "", //停车位
+                jianjie = "", //小区简介
+                zhoubian = "", //周边信息
+                lat, //精度
+                lng //维度
 
-			} else if ( $doc.find( '.plptinfo_txt' ).length > 0 ) {
+            console.log(`[${city.name}] 详情页 ${detail_url} 分析开始`);
 
-				let $baseinfo = $doc.find( '.plptinfo_txt' );
-				let $table = $baseinfo.find( '.plptinfo_list.clearfix ul' );
-				houseData.tingchewei = $table.find( "strong:contains(停y车y位)" ).parent().contents().eq( 1 ).text().trim(); //停车位
-				houseData.wuyegongsi = $table.find( "strong:contains(物业公司)" ).parent().contents().eq( 1 ).text().trim(); //物业公司
-				houseData.wuyedizhi = $table.find( "strong:contains(小区地址)" ).parent().contents().eq( 1 ).text().trim();
+            //名字
+            name = $doc.find('h1.public-lpm2').text().trim();
 
-				var infoUrl = $baseinfo.find( ".more" ).attr( "href" );
+            //得到区县
+            var $quxian = $doc.find('.public-m5 a').slice(2);
+            for (let i = 0; i < $quxian.length; i++) {
+                county += $quxian.eq(i).text().trim();
+            }
 
-				getInfo2( infoUrl, houseData )
-					.then( () => {
-						datasouce.push( [
-							houseData.name, //名称
-							houseData.price, //价格
-							houseData.cityname, //城市
-							houseData.county, //区县
-							houseData.address, //'小区地址',
-							houseData.wuyeleibie, //物业类别,
-							houseData.wuyegongsi, //物业公司
-							houseData.wuyedizhi, //物业地址
-							houseData.wuyefei, //物业费
-							houseData.jungongshijian, //竣工时间,
-							houseData.kaifashang, //开发商
-							houseData.jianzhuleibie, //建筑类别
-							houseData.jianzhumianji,
-							houseData.zhandimianji, //建筑面积	占地面积
-							houseData.dangqihushu, //当期户数,
-							houseData.zonghushu, //总户数
-							houseData.tingchewei, //停车位
-							houseData.jianjie, //小区简介
-							houseData.zhoubian, //周边信息
-							houseData.lat, //精度
-							houseData.lng //维度
-						] );
-						resolve( houseData.name ); //返回数据
-					}, ( err ) => {
-						console.log( `错误 中转页 ${detailUrl} 分析失败 ${err}` );
-						resolve();
-					} );
+            //特色
+            var $tese = $doc.find('.public-lpm4 span');
+            for (var i = 0; i < $tese.length; i++) {
+                tese += $tese.eq(i).text().trim() + " ";
+            }
 
-			} else {
+            var $table = $doc.find('.lpm-section4-table.mt30')
+            var $td = $table.find('td');
 
-				var newcode_reg = /newcode=([^=]*)[\&'"\)]/ig;
+            function getTd(i){
+                return $td.eq(i).text().trim().replace( /\n|\r|\t/g, "" )
+            }
 
-				var result = newcode_reg.exec( body ); //读移动端页面
+            var jiage = getTd(1),
+            kaipanshijian = getTd(3),
+            jiaofangshijian = getTd(5),
+            shoulouchudianhua = getTd(7),
+            loupandizhi = getTd(9),
+            zhuangxiu = getTd(11),
+            jianzhuleibie = getTd(13),
+            guihuamianji = getTd(15),
+            jianzhumianji = getTd(17),
+            huxing = getTd(19),
+            rongjilv = getTd(21),
+            lvhualv = getTd(23),
+            chanquan = getTd(25),
+            hushu = getTd(27),
+            cheweishu = getTd(29),
+            wuyegongsi = getTd(31),
+            wuyeleibie = getTd(33),
+            wuyefei = getTd(35),
+            kaifashang = getTd(37),
+            xiaoshoudaili = getTd(39),
+            gongchengjidu = getTd(41),
+            yushouxuke = getTd(43),
+            shoulouchu = getTd(45),
+            fangwuchaoxiang = getTd(47),
+            jianzhudanwei = getTd(49),
+            dongshu = getTd(51),
+            shigongdanwei = getTd(53);
 
-				if ( result ) {
+            //户数
+            var hushudata = $table.find('td:contains(规划户数)').next().text().trim().replace(/\n|\r|\t/g, "")
+            if (hushudata.indexOf("总户数") > -1) {
+                zonghushu = hushudata.split("总户数")[1].split("当期户数")[0];
+            }
+            if (hushudata.indexOf("当期户数") > -1) {
+                dangqihushu = hushudata.split("当期户数")[1].split("总户数")[0];
+            }
+            // hushudata.split( ' ' ).forEach( ( hushu, i ) => {
+            //     if ( hushu.indexOf( "总户数" ) > -1 ) {
+            //         zonghushu = hushu;
+            //     }
 
-					let newcode = result[ 1 ];
-					let detailUrl = 'http://m.fang.com/xf/' + city.sname + '/' + newcode + '.htm'
-					getMoblieDetail( detailUrl, city, houseData )
-						.then( () => {
-							datasouce.push( [
-								houseData.name, //名称
-								houseData.price, //价格
-								houseData.cityname, //城市
-								houseData.county, //区县
-								houseData.address, //'小区地址',
-								houseData.wuyeleibie, //物业类别,
-								houseData.wuyegongsi, //物业公司
-								houseData.wuyedizhi, //物业地址
-								houseData.wuyefei, //物业费
-								houseData.jungongshijian, //竣工时间,
-								houseData.kaifashang, //开发商
-								houseData.jianzhuleibie, //建筑类别
-								houseData.jianzhumianji,
-								houseData.zhandimianji, //建筑面积	占地面积
-								houseData.dangqihushu, //当期户数,
-								houseData.zonghushu, //总户数
-								houseData.tingchewei, //停车位
-								houseData.jianjie, //小区简介
-								houseData.zhoubian, //周边信息
-								houseData.lat, //精度
-								houseData.lng //维度
-							] );
-							resolve( houseData.name ); //返回数据
-						}, ( err ) => {
-							console.log( `错误 中转页 ${detailUrl} 分析失败 ${err}` );
-							resolve();
-						} );
+            //     if ( hushu.indexOf( "当期户数" ) > -1 ) {
+            //         dangqihushu = hushu;
+            //     }
+            // } );
 
+            //简介
+            jianjie = $doc.find('strong:contains(项目介绍)').parent().next().text().trim();
 
-				} else {
-					console.log( `错误 未知类型 ${detailUrl}的中转页` );
-					resolve();
-				}
+            //周边
+            zhoubian = $doc.find('strong:contains(区位介绍)').parent().next().text();
 
-			}
+            getMap(detail_url.replace(/detail/ig, 'loupan'))
 
+            .then(function (mapData) {
 
-		} );
-	} );
+                var houseData = [
+                   name , //名称
+                   cityname , //城市
+                   county , //区县
+                   jiage ,
+                   kaipanshijian ,
+                   jiaofangshijian ,
+                   shoulouchudianhua ,
+                   loupandizhi ,
+                   zhuangxiu ,
+                   jianzhuleibie ,
+                   guihuamianji,
+                   jianzhumianji ,
+                   huxing,
+                   rongjilv ,
+                   lvhualv,
+                   chanquan ,
+                   hushu ,
+                   cheweishu ,
+                   wuyegongsi ,
+                   wuyeleibie,
+                   wuyefei,
+                   kaifashang ,
+                   xiaoshoudaili ,
+                   gongchengjidu ,
+                   yushouxuke ,
+                   shoulouchu ,
+                   fangwuchaoxiang,
+                   jianzhudanwei,
+                   dongshu ,
+                   shigongdanwei ,
+                   mapData.lng,
+                   mapData.lat,
+                   jianjie,
+                   zhoubian,
+                   detail_url,
+                ]
 
+                console.log(`[${city.name}] ${name}详情页抓取成功`);
+                resolve(houseData);
+            });
 
-	return Promise.race( [ timeoutPromise( taskTimeout ), detailPromise ] );
+        });
+    });
+
+    return detailPromise;
+    // return Promise.race( [ timeoutPromise( taskTimeout,()=>{ 
+    //     console.log(`详情页 ${detail_url} 超时`)
+    //     addErrPage(detail_url);
+    // } ), detailPromise ] );
 
 }
 
-function getMap( url, houseData ) { //得到经纬度
-	return new Promise( ( resolve, reject ) => {
-		fetch( url, {
-			encoding: 'utf-8',
-			open_timeout: timeout,
-			compressed: true,
-		}, ( err, res, body ) => {
+function getMap(map_url) { //得到经纬度
+    return new Promise((resolve, reject) => {
+        fetch(map_url, (err, res, body) => {
 
-			if ( err ) {
-				console.log( '错误 类型1的map页', url, '分析失败', err );
-				resolve();
-				return;
-			}
+            var lng = "",
+                lat = "";
 
-			var mapx_reg = /"mapx":"([^"]*)"/ig;
-			var mapy_reg = /"mapy":"([^"]*)"/ig;
+            if (err) {
+                console.log('错误 map页', map_url, '分析失败', err);
+            } else {
+                var lng_reg = /lng(\s)*=(\s)*['"]([^"']*)['"]/ig; //经度
+                var lat_reg = /lat(\s)*=(\s)*['"]([^"']*)['"]/ig; //纬度
 
-			var x_result = mapx_reg.exec( body ),
-				y_result = mapy_reg.exec( body );
+                var x_result = lng_reg.exec(body),
+                    y_result = lat_reg.exec(body);
 
-			if ( x_result != null ) {
-				houseData.lng = x_result[ 1 ];
-			}
-			if ( y_result != null ) {
-				houseData.lat = y_result[ 1 ];
-			}
-			resolve();
-		} );
-	} );
-}
+                if (x_result != null) {
+                    lng = x_result[3];
+                }
+                if (y_result != null) {
+                    lat = y_result[3];
+                }
+            }
 
-function getInfo( url, houseData ) { //得到信息
-	return new Promise( ( resolve, reject ) => {
-		fetch( url, {
-			encoding: 'utf-8',
-			open_timeout: timeout,
-		}, ( err, res, body ) => {
+            resolve({
+                lng,
+                lat
+            });
 
-			if ( err ) {
-				console.log( '错误 类型1的info页', url, '分析失败', err );
-				resolve();
-				return;
-			}
-
-			var $doc = $( body );
-
-			//得到楼盘
-			houseData.county = $doc.find( '#xfzxxq_B01_03 p a' ).eq( 2 ).text().replace( /楼盘/ig, "" );
-
-			//得到名字
-			houseData.name = $doc.find( '.ts_linear' ).text();
-
-
-			var $form = $doc.find( '.besic_inform' );
-			var $table = $form.find( 'table' );
-
-			houseData.price = $table.find( '.currentPrice' ).text().trim();
-			houseData.address = $table.find( "strong:contains(售楼地址)" ).parent().contents().eq( 1 ).text().trim();
-			houseData.wuyeleibie = $table.find( "strong:contains(物业类别)" ).parent().contents().eq( 1 ).text().trim();
-			houseData.wuyefei = $table.find( "strong:contains(物 业 费 )" ).parent().contents().eq( 1 ).text().trim();
-			houseData.wuyedizhi = $table.find( "strong:contains(物业地址)" ).parent().contents().eq( 1 ).text().trim();
-			houseData.wuyegongsi = $table.find( "strong:contains(物业公司)" ).parent().contents().eq( 1 ).text().trim();
-			houseData.jianzhuleibie = $table.find( "strong:contains(建筑类别)" ).parent().contents().eq( 1 ).text().trim();
-			houseData.kaifashang = $table.find( "strong:contains(开 发 商 )" ).next().text().trim().replace( /\[房企申请入驻\]/ig, "" );
-
-			houseData.tingchewei = $form.find( "#xq_cwxx_anchor" ).next().text().trim();
-			houseData.jianjie = $form.find( "#xq_xmjs_anchor" ).next().text().trim();
-			houseData.zhoubian = $form.find( "#xq_xmpt_anchor" ).next().text().trim();
-
-			var $otherinfo = $form.find( "#xq_xgxx_anchor" ).next().contents();
-
-			houseData.zhandimianji = $otherinfo.eq( 2 ).text().trim();
-			// houseData.jianzhumianji = $otherinfo.eq(6).text().trim();
-			houseData.jungongshijian = $otherinfo.eq( 14 ).text().trim();
-
-			var hushudata = $otherinfo.eq( $otherinfo.length - 3 ).text().trim();
-
-			hushudata.split( ' ' ).forEach( ( hushu, i ) => {
-				if ( hushu.indexOf( "总户数" ) > -1 ) {
-					houseData.zonghushu = hushu;
-				}
-
-				if ( hushu.indexOf( "当期户数" ) > -1 ) {
-					houseData.dangqihushu = hushu;
-				}
-			} );
-
-			resolve();
-
-		} );
-	} );
-}
-
-function getMap2( url, houseData ) {
-
-	return new Promise( ( resolve, reject ) => {
-
-		fetch( url, {
-			encoding: 'GBK',
-			open_timeout: timeout,
-			compressed: true,
-		}, ( err, res, body ) => {
-
-			if ( err ) {
-				console.log( '错误 类型2的map页', url, '分析失败', err );
-				resolve();
-				return;
-			}
-
-			var mapx_reg = /"px":"([^"]*)"/ig;
-			var mapy_reg = /"py":"([^"]*)"/ig;
-
-			var x_result = mapx_reg.exec( body ),
-				y_result = mapy_reg.exec( body );
-
-			if ( x_result != null ) {
-				houseData.lng = x_result[ 1 ];
-			}
-			if ( y_result != null ) {
-				houseData.lat = y_result[ 1 ];
-			}
-
-			resolve();
-
-		} );
-
-	} );
-
-
-}
-
-function getInfo2( infoUrl, houseData ) {
-
-
-	return new Promise( function ( resolve, reject ) {
-
-		fetch( infoUrl, {
-			encoding: 'gb2312',
-			compressed: true,
-			open_timeout: timeout,
-		}, ( err, res, body ) => {
-
-			if ( err ) {
-				console.log( '错误 类型2的info页', url, '分析失败', err );
-				resolve();
-				return;
-			}
-
-			var $doc = $( body );
-
-			var $lbox = $doc.find( ".lbox" );
-
-			var $baseinfo = $doc.find( "#xq_jbxx_anchor" ).parent().parent().next();
-			var $jianjie = $doc.find( "#xq_xqjj_anchor" ).parent().parent().next();
-			var $zhoubian = $doc.find( "#xq_zbxx_anchor" ).parent().parent().next();
-			var $peitao = $doc.find( "#xq_ptss_anchor" ).parent().parent().next();
-			var $xianguanxinxi = $doc.find( "#xq_xgxx_anchor" ).parent().parent().next();
-
-			var mapUrl = $doc.find( "#xq_dlwz_anchor" ).parent().parent().next().find( "iframe" ).attr( "src" ) || "";
-
-			houseData.name = $doc.find( ".maininfo .leftinfo .ewmBoxTitle .floatl" ).text().trim(); //名称
-			houseData.price = $doc.find( ".pred.pirceinfo" ).eq( 0 ).text().trim(); //价格
-
-			houseData.county = $baseinfo.find( "strong:contains(所属区域)" ).parent().contents().eq( 1 ).text().trim(); //区县
-			houseData.address = $baseinfo.find( "strong:contains(小区地址)" ).parent().contents().eq( 1 ).text().trim(); //'小区地址'
-			houseData.wuyeleibie = $baseinfo.find( "strong:contains(物业类别)" ).parent().contents().eq( 1 ).text().trim(); //物业类别 
-			// houseData. // wuyegongsi = $xianguanxinxi.find( "strong:contains(代理商：)" ).parent().contents().eq( 1 ).text().trim(); //物业类别 
-			// houseData. // wuyedizhi = "", //物业地址
-			houseData.wuyefei = $baseinfo.find( "strong:contains(物 业 费 )" ).parent().contents().eq( 1 ).text().trim(); //物业费
-			houseData.jungongshijian = $baseinfo.find( "strong:contains(竣工时间)" ).parent().contents().eq( 1 ).text().trim(); //竣工时间
-			houseData.kaifashang = $baseinfo.find( "strong:contains(开 发 商)" ).parent().contents().eq( 1 ).text().trim(); //开发商
-			houseData.jianzhuleibie = $baseinfo.find( "strong:contains(建筑类别)" ).parent().contents().eq( 1 ).text().trim(); //建筑类别
-			houseData.jianzhumianji = $baseinfo.find( "strong:contains(建筑面积)" ).parent().contents().eq( 1 ).text().trim(); //建筑面积	
-			houseData.zhandimianji = $baseinfo.find( "strong:contains(占地面积)" ).parent().contents().eq( 1 ).text().trim(); //占地面积
-			houseData.dangqihushu = $baseinfo.find( "strong:contains(当期户数)" ).parent().contents().eq( 1 ).text().trim(); //当期户数 
-			houseData.zonghushu = $baseinfo.find( "strong:contains(总 户 数)" ).parent().contents().eq( 1 ).text().trim(); //总户数
-			// houseData. // tingchewei = $peitao.find( "string:contains(停 车 位：)" ).parent().contents().eq( 1 ).text().trim(); //停车位
-			houseData.jianjie = $jianjie.text().trim(); //小区简介
-			houseData.zhoubian = $zhoubian.text().trim(); //周边信息
-			// lat = "", //精度
-			// lng = ""; //维度
-
-			getMap2( mapUrl, houseData )
-				.then( function () {
-					resolve(); //返回数据
-				}, function ( err ) {
-					reject();
-				} );
-
-
-		} );
-
-	} );
-}
-
-function getMoblieDetail( detailUrl, city, houseData ) {
-
-	return new Promise( function ( resolve, reject ) {
-		// let detailPage = `http://m.fang.com/xf/${city}/${pageid}.htm`;
-		console.log( `正在加载${detailUrl}` );
-		fetch( detailUrl, {
-			encoding: 'GBK'
-		}, function ( err, res, body ) {
-			if ( err ) {
-				console.log( err );
-				reject();
-				return;
-			}
-			console.log( `移动端页面 ${detailUrl}加载成功` );
-
-			var $doc = $( body );
-
-			houseData.name = $doc.find( '#projname' ).text().trim();
-
-			if ( houseData.name === '' ) {
-				console.log( `移动端页面 ${detailUrl} 没有获取到name` );
-				reject();
-				return;
-			}
-
-			houseData.price = $doc.find( '#price' ).text().trim();
-			var $info = $doc.find( "#flextableID" );
-			var $kaipan = $doc.find( "#wapxfxqy_B02_19" )
-			houseData.kaipan = $kaipan.find( "p" ).text();
-			houseData.addressr = $kaipan.next().find( "p" ).text().trim(); //小区地址
-			houseData.jianjie = $doc.find( ".stag" ).text(); // 小区简介
-			houseData.jungongshijian = $info.find( ':contains(竣工时间)' ).find( 'p' ).text(); //入住时间
-			houseData.wuyeleibie = $info.find( ':contains(物业类型' ).find( 'p' ).text(); //物业类型
-			houseData.jianzhuleibie = $info.find( ':contains(建筑类别)' ).find( 'p' ).text(); //建筑类别
-			houseData.zhuhushu = $info.find( ':contains(住户数)' ).find( 'p' ).text();
-			houseData.tingchewei = $info.find( ':contains(停车位)' ).find( 'p' ).text();
-			houseData.kaifashang = $info.find( ':contains(开发商)' ).find( 'p' ).text();
-			houseData.wuyegongsi = $info.find( ':contains(物业公司)' ).find( 'p' ).text();
-			houseData.wuyefei = $info.find( ':contains(物业费)' ).find( 'p' ).text();
-			var pos = querystring.parse( $doc.find( "#drivedaohang" ).attr( "href" ) );
-			houseData.lat = pos.mapx; //纬度
-			houseData.lng = pos.mapy; //精度
-
-			resolve();
-
-		} );
-	} );
-
+        });
+    });
 }
 
 
-function makeJSON( data ) {
+function getTotalPage(url) {
+    return new Promise((resolve, reject) => {
+        fetch(url, (err, red, body) => {
 
-	var dir = data[ 0 ];
-	var filename = data[ 1 ] + '.json';
-	var datasouce = data[ 2 ];
-	var filepath = path.join( dir, filename );
+            if (err) {
+                console.log(err);
+                totalPage = 1;
 
-	console.log( filepath );
-	return new Promise( ( resolve, reject ) => {
+            } else {
+                var $doc = $(body);
 
+                var totalPage = parseInt($doc.find(".tg-rownum-num li").last().text());
 
+                if (totalPage.toString() === 'NaN') {
+                    totalPage = 1;
+                }
+            }
 
-		fs.writeFile( filepath, JSON.stringify( datasouce, null, "\t" ), function ( err ) {
-			if ( err ) {
-				console.log( filename, '保存失败', err );
-				reject( err );
-			} else {
-				console.log( filename, '保存成功' );
-				resolve();
-			}
-		} );
-	} );
+            resolve(totalPage);
+
+        });
+    })
 }
 
-function makeXLSX( data ) {
 
-	var dir = data[ 0 ];
-	var filename = data[ 1 ];
-	var datasouce = data[ 2 ];
+function timeoutPromise(time, fn) {
+    return new Promise((resolve, reject) => {
+        setTimeout(function () {
+            if (fn) {
+                fn();
+            }
+            resolve();
+        }, time);
+    });
+}
 
-	var savedata = [
-		[ '小区名称',
-			'价格',
-			'城市',
-			'区县',
-			'小区地址',
-			'物业类别',
-			'物业公司',
-			'物业地址',
-			'物业费',
-			'竣工时间',
-			'开发商', 　　　　
-			'建筑类别',
-			'建筑面积',
-			'占地面积',
-			'当期户数',
-			'总户数',
-			'停车位',
-			'小区简介',
-			'周边信息',
-			'经度',
-			'纬度',
-		]
-	].concat( datasouce );
 
-	console.log( savedata.length );
-	console.log( savedata[ 0 ] );
-	console.log( savedata[ 1 ] );
+function makeJSON(data) {
 
-	return new Promise( function ( resolve, reject ) {
-		console.log( `正在生成${filename}` );
-		var buffer = xlsx.build( [ {
-			name: filename,
-			data: savedata,
-		} ] ); // returns a buffer 
-		fs.writeFile( path.join( dir, filename ) + '.xlsx', buffer, 'binary', function ( err ) {
-			if ( err ) {
-				console.log( `完成 ${filename}保存失败 `, err );
-				reject();
-			} else {
-				console.log( `完成 ${filename}保存成功 ` );
-				resolve();
-			}
+    var dir = data.dir;
+    var filename = data.filename;
+    var datasouce = data.datasouce;
+    var filepath = path.join(dir, filename);
 
-		} );
+    return new Promise((resolve, reject) => {
 
-	} );
+        fs.writeFile(filepath + '.json', JSON.stringify(datasouce, null, "\t"), function (err) {
+
+            datasouce = null;
+            if (err) {
+                console.log(filename, '保存失败', err);
+                reject(err);
+            } else {
+                console.log(filename, '保存成功');
+                resolve();
+            }
+        });
+    });
+}
+
+
+function makeXLSX(data) {
+
+    var dir = data.dir;
+    var filename = data.filename;
+    var datasouce = data.datasouce;
+    var filepath = path.join(dir, filename);
+
+    var savedata = [
+        [
+            '小区名称',
+            '城市',
+            '区县',
+            "单价", 
+            "开盘时间", 
+            "交房时间", 
+            "售楼处电话", 
+            "楼盘地址", 
+            "装修状况", 
+            "建筑形式", 
+            "规划面积", 
+            "建筑面积", 
+            "主力户型", 
+            "容  积 率", 
+            "绿  化 率", 
+            "房屋产权", 
+            "规划户数", 
+            "车  位 数", 
+            "物业公司", 
+            "物业类型", 
+            "物  业 费", 
+            "开  发 商", 
+            "销售代理", 
+            "工程进度", 
+            "预售许可证", 
+            "售楼处地址", 
+            "房屋朝向", 
+            "建筑设计单位", 
+            "栋数", 
+            "施工单位",
+            "经度",
+            "纬度"
+        ]
+    ].concat(datasouce);
+
+    return new Promise(function (resolve, reject) {
+        console.log(`正在生成${filename}`);
+        var buffer = xlsx.build([{
+            name: filename,
+            data: savedata,
+        }]); // returns a buffer 
+        fs.writeFile(filepath + '.xlsx', buffer, 'binary', function (err) {
+
+            savedata = null;
+            if (err) {
+                console.log(`完成 ${filename}保存失败 `, err);
+                reject();
+            } else {
+                console.log(`完成 ${filename}保存成功 `);
+                resolve();
+            }
+
+        });
+
+    });
+
+}
+
+function fetch(url, cb) {
+
+    var trycount = 3; //如果试3次都不上就放弃
+    var count = 0;
+
+    sendData();
+
+    function sendData() {
+        request({
+            method: 'GET',
+            uri: url,
+            gzip: true,
+            timeout: taskTimeout,
+        }, (err, res, body) => {
+
+            if (err) {
+                count++;
+                if (count === trycount) {
+                    console.log(`错误  ${url} 经常尝试3次连接 依旧失败 ${err}`);
+                    addErrPage(url);
+                    cb(err, res, body);
+                } else {
+                    sendData();
+                }
+            } else {
+                cb(err, res, body);
+            }
+
+        });
+    }
 
 }
