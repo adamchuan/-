@@ -12,8 +12,8 @@ var path = require('path');
 var url = require('url');
 var xlsxSteam = require('xlsx-stream');
 
-var citys = require('./citys.json');
-var province = require('./province.json');
+var citys = require('./sourcedata//citys.json');
+var province = require('./sourcedata//province.json');
 
 var startPage = 1;
 var citylength = 100;
@@ -380,18 +380,18 @@ function getDetail(detail_url, city) {
             console.log(`[${city.name}] 详情页 ${detail_url} 分析开始`);
 
             //名字
-            name = $doc.find('h1.public-lpm2').text().trim();
+            name = $doc.find('h1.public-lpm2').text().trim().replace( /\n|\r|\t/g, "" );
 
             //得到区县
             var $quxian = $doc.find('.public-m5 a').slice(2);
             for (let i = 0; i < $quxian.length; i++) {
-                county += $quxian.eq(i).text().trim();
+                county += $quxian.eq(i).text().trim().replace( /\n|\r|\t/g, "" );
             }
 
             //特色
             var $tese = $doc.find('.public-lpm4 span');
             for (var i = 0; i < $tese.length; i++) {
-                tese += $tese.eq(i).text().trim() + " ";
+                tese += $tese.eq(i).text().trim().replace( /\n|\r|\t/g, "" ) + " ";
             }
 
             var $table = $doc.find('.lpm-section4-table.mt30')

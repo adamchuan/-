@@ -14,7 +14,9 @@
     "iconv": "^2.1.11",
     "iconv-lite": "^0.1.0",
     "needle": "^0.11.0",
+    "node-adodb": "^2.0.2",
     "node-xlsx": "^0.6.0",
-    "request": "^2.67.0"
+    "request": "^2.67.0",
+    "xlsx-stream": "^0.1.2"
   }
 }

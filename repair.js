@@ -12,8 +12,8 @@ var path = require('path');
 var url = require('url');
 var xlsxSteam = require('xlsx-stream');
 
-var citys = require('./citys.json');
-var province = require('./province.json');
+var citys = require('./sourcedata/citys.json');
+var province = require('./sourcedata/province.json');
 
 var dir_name = "DATA";
 
